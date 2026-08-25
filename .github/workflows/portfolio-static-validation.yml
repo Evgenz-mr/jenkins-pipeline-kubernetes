@@ -1,0 +1,21 @@
+name: portfolio-static-validation
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ensure modern pipeline and GitOps contract exist
+        run: test -s Jenkinsfile.modern && test -s docs/GITOPS_HANDOFF.md
+      - name: Reject obvious credentials in modern portfolio files
+        run: |
+          if grep -RniE '(password|token|secret)[[:space:]]*=[[:space:]]*["'"'][^$]' Jenkinsfile.modern docs/GITOPS_HANDOFF.md; then
+            echo 'Potential plaintext credential found'; exit 1
+          fi
