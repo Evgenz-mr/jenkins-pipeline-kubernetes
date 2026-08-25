@@ -1,0 +1,75 @@
+pipeline {
+    agent any
+
+    options {
+        timeout(time: 30, unit: 'MINUTES')
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    environment {
+        IMAGE_NAME = 'gitops-demo'
+        REGISTRY   = 'ghcr.io/evgenz-mr'
+        IMAGE_TAG  = "${env.GIT_COMMIT ?: 'local'}"
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Validate') {
+            parallel {
+                stage('ShellCheck') {
+                    steps {
+                        sh 'command -v shellcheck >/dev/null && shellcheck build.sh || true'
+                    }
+                }
+                stage('Helm lint') {
+                    steps {
+                        sh 'command -v helm >/dev/null && helm lint helm/acme || true'
+                    }
+                }
+            }
+        }
+
+        stage('Build image') {
+            steps {
+                sh 'docker build -t ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} docker/'
+            }
+        }
+
+        stage('Container scan') {
+            steps {
+                sh '''
+                  if command -v trivy >/dev/null; then
+                    trivy image --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
+                  else
+                    echo "Trivy is not installed on this Jenkins agent; scan stage is documented but skipped."
+                  fi
+                '''
+            }
+        }
+
+        stage('Publish') {
+            when { branch 'master' }
+            steps {
+                withCredentials([usernamePassword(credentialsId: 'container-registry', usernameVariable: 'REGISTRY_USER', passwordVariable: 'REGISTRY_PASSWORD')]) {
+                    sh '''
+                      echo "$REGISTRY_PASSWORD" | docker login ghcr.io -u "$REGISTRY_USER" --password-stdin
+                      docker push ${REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            sh 'docker logout ghcr.io || true'
+            cleanWs(deleteDirs: true, notFailBuild: true)
+        }
+    }
+}
